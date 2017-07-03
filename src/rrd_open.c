@@ -6,15 +6,19 @@
  * $Id$
  *****************************************************************************/
 
-#include "rrd_tool.h"
-#include "unused.h"
-
 #ifdef WIN32
+#include <windows.h>
+#if _WIN32_MAXVER >= 0x0602 /* _WIN32_WINNT_WIN8 */
+#include <synchapi.h>
+#endif
+
 #include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #endif
 
+#include "rrd_tool.h"
+#include "unused.h"
 
 #ifdef HAVE_BROKEN_MS_ASYNC
 #include <sys/types.h>
@@ -31,8 +35,8 @@
 #define	_LK_UNLCK	0	/* Unlock */
 #define	_LK_LOCK	1	/* Lock */
 #define	_LK_NBLCK	2	/* Non-blocking lock */
-#define	_LK_RLCK	3	/* Lock for read only */
-#define	_LK_NBRLCK	4	/* Non-blocking lock for read only */
+#define	_LK_RLCK	3	/* "Same as _LK_NBLCK" */
+#define	_LK_NBRLCK	4	/* "Same as _LK_LOCK" */
 
 
 #define	LK_UNLCK	_LK_UNLCK
@@ -124,6 +128,8 @@
 #endif
 #endif
 
+static int rrd_rwlock(rrd_file_t *rrd_file, int writelock);
+
 /* Open a database file, return its header and an open filehandle,
  * positioned to the first cdp in the first rra.
  * In the error path of rrd_open, only rrd_free(&rrd) has to be called
@@ -201,6 +207,14 @@ rrd_file_t *rrd_open(
       if (rrd_file->rados == NULL)
           goto out_free;
 
+      if (rdwr & RRD_LOCK) {
+          /* Note: rados read lock is not implemented.  See rrd_lock(). */
+          if (rrd_rwlock(rrd_file, rdwr & RRD_READWRITE) != 0) {
+              rrd_set_error("could not lock RRD");
+              goto out_close;
+          }
+      }
+
       if (rdwr & RRD_CREAT)
           goto out_done;
 
@@ -269,6 +283,13 @@ rrd_file_t *rrd_open(
     }
 #endif    
 #endif
+
+    if (rdwr & RRD_LOCK) {
+        if (rrd_rwlock(rrd_file, rdwr & RRD_READWRITE) != 0) {
+            rrd_set_error("could not lock RRD");
+            goto out_close;
+        }
+    }
 
     /* Better try to avoid seeks as much as possible. stat may be heavy but
      * many concurrent seeks are even worse.  */
@@ -556,13 +577,30 @@ void mincore_print(
 int rrd_lock(
     rrd_file_t *rrd_file)
 {
+    return rrd_rwlock(rrd_file, 1);
+}
+
+static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
+{
 #ifdef DISABLE_FLOCK
     (void)rrd_file;
     return 0;
 #else
 #ifdef HAVE_LIBRADOS
-    if (rrd_file->rados)
-      return rrd_rados_lock(rrd_file->rados);
+    if (rrd_file->rados) {
+        /*
+         * No read lock on rados.  It would be complicated by the
+         * use of a short finite lock duration in rrd_rados_lock().
+         * Also rados does not provide blocking locks.
+         *
+         * Rados users may use snapshots if they need to
+         * e.g. obtain a consistent backup.
+         */
+        if (writelock)
+            return rrd_rados_lock(rrd_file->rados);
+        else
+            return 0;
+    }
 #endif
     int       rcstat;
     rrd_simple_file_t *rrd_simple_file;
@@ -572,14 +610,30 @@ int rrd_lock(
         struct _stat st;
 
         if (_fstat(rrd_simple_file->fd, &st) == 0) {
-            rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, st.st_size);
+            while (1) {
+                rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, st.st_size);
+                if (rcstat == 0)
+                    break; /* success */
+                if (rcstat != EACCES)
+                    break; /* failure */
+                /* EACCES: someone else has the lock. */
+
+                /*
+                 * Wait 0.01 seconds before trying again.  _locking()
+                 * with _LK_LOCK would work similarly but waits 1 second
+                 * between tries, which seems less desirable.
+                 */
+                Sleep(10);
+            }
         } else {
             rcstat = -1;
         }
 #else
         struct flock lock;
 
-        lock.l_type = F_WRLCK;  /* exclusive write lock */
+        lock.l_type = writelock ?
+                          F_WRLCK: /* exclusive write lock or */
+                          F_RDLCK; /* shared read lock */
         lock.l_len = 0; /* whole file */
         lock.l_start = 0;   /* start of file */
         lock.l_whence = SEEK_SET;   /* end of file */
