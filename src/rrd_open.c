@@ -334,18 +334,12 @@ rrd_file_t *rrd_open(
        When we stop reading, it is highly unlikely that we start up again.
        In this manner we actually save time and disk access (and buffer cache).
        Thanks to Dave Plonka for the Idea of using POSIX_FADV_RANDOM here. */
-    posix_fadvise(rrd_simple_file->fd, 0, 0, POSIX_FADV_RANDOM);
+    if (rdwr & RRD_COPY) {
+        posix_fadvise(rrd_simple_file->fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+    } else {
+        posix_fadvise(rrd_simple_file->fd, 0, 0, POSIX_FADV_RANDOM);
+    }
 #endif
-
-/*
-        if (rdwr & RRD_READWRITE)
-        {
-           if (setvbuf((rrd_simple_file->fd),NULL,_IONBF,2)) {
-                  rrd_set_error("failed to disable the stream buffer\n");
-                  return (-1);
-           }
-        }
-*/
 
 #ifdef HAVE_MMAP
 #ifndef HAVE_POSIX_FALLOCATE
