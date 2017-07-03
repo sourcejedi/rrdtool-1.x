@@ -390,7 +390,7 @@ rrd_file_t *rrd_open(
 #ifdef USE_MADVISE
     if (rdwr & RRD_COPY) {
         /* We will read everything in a moment (copying) */
-        madvise(data, rrd_file->file_len, MADV_SEQUENTIAL );
+        madvise(data, rrd_file->file_len, MADV_SEQUENTIAL);
     } else {
         /* We do not need to read anything in for the moment */
         madvise(data, rrd_file->file_len, MADV_RANDOM);
