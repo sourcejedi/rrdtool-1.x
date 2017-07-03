@@ -383,6 +383,17 @@ rrd_file_t *rrd_open(
     if (rdwr & RRD_CREAT)
         goto out_done;
 
+    if (rdwr & RRD_READAHEAD) {
+#ifdef USE_MADVISE
+        madvise(data, rrd_file->file_len, MADV_WILLNEED);
+#endif
+#if !defined(HAVE_MMAP) && defined(HAVE_POSIX_FADVISE)
+        posix_fadvise(rrd_simple_file->fd, 0, 0, POSIX_FADV_WILLNEED);
+#endif
+        /* If perfect READAHEAD is not achieved for whatever reason, caller
+           will not thank us for advising the kernel of RANDOM access below.*/
+        rdwr |= RRD_COPY;
+    }
     /* In general we need no read-ahead when dealing with rrd_files.
        When we stop reading, it is highly unlikely that we start up again.
        In this manner we actually save time and disk access (and buffer cache).
