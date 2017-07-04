@@ -473,15 +473,17 @@ read_check:
     rrd_file->pos = offset;
 
 #if defined(HAVE_MMAP) && defined(USE_MADVISE)
-    /* MADV_SEQUENTIAL mentions drop-behind.  Override it for the header now
-     * we've read it, in case anyone implemented drop-behind.
-     *
-     * Do *not* fall back to fadvise() for !HAVE_MMAP.  We've already copied
-     * the header in that case.  Doing e.g. FADV_NORMAL on Linux (4.12) on
-     * *any* region would negate the effect of previous FADV_SEQUENTIAL.
-     */
-    madvise(data, sysconf(_SC_PAGESIZE), MADV_NORMAL);
-    madvise(data, sysconf(_SC_PAGESIZE), MADV_WILLNEED);
+    if (data != MAP_FAILED) {
+        /* MADV_SEQUENTIAL mentions drop-behind.  Override it for the header
+         * now we've read it, in case anyone implemented drop-behind.
+         *
+         * Do *not* fall back to fadvise() for !HAVE_MMAP.  We've already copied
+         * the header in that case.  Doing e.g. FADV_NORMAL on Linux (4.12) on
+         * *any* region would negate the effect of previous FADV_SEQUENTIAL.
+         */
+        madvise(data, sysconf(_SC_PAGESIZE), MADV_NORMAL);
+        madvise(data, sysconf(_SC_PAGESIZE), MADV_WILLNEED);
+    }
 #endif
 
     {
