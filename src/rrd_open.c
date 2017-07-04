@@ -13,6 +13,7 @@
 #endif
 
 #include <stdlib.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #endif
@@ -632,7 +633,7 @@ static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
                 rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, st.st_size);
                 if (rcstat == 0)
                     break; /* success */
-                if (rcstat != EACCES)
+                if (errno != EACCES)
                     break; /* failure */
                 /* EACCES: someone else has the lock. */
 
