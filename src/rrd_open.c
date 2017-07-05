@@ -10,12 +10,12 @@
 #include <windows.h>
 #if _WIN32_MAXVER >= 0x0602 /* _WIN32_WINNT_WIN8 */
 #include <synchapi.h>
+#include <limits.h>
 #endif
 
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #endif
 
 #include "rrd_tool.h"
@@ -626,26 +626,20 @@ static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
     rrd_simple_file = (rrd_simple_file_t *)rrd_file->pvt;
     {
 #if defined(_WIN32) && !defined(__CYGWIN__) && !defined(__CYGWIN32__)
-        struct _stat st;
+        while (1) {
+            rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, LONG_MAX);
+            if (rcstat == 0)
+                break; /* success */
+            if (errno != EACCES)
+                break; /* failure */
+            /* EACCES: someone else has the lock. */
 
-        if (_fstat(rrd_simple_file->fd, &st) == 0) {
-            while (1) {
-                rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, st.st_size);
-                if (rcstat == 0)
-                    break; /* success */
-                if (errno != EACCES)
-                    break; /* failure */
-                /* EACCES: someone else has the lock. */
-
-                /*
-                 * Wait 0.01 seconds before trying again.  _locking()
-                 * with _LK_LOCK would work similarly but waits 1 second
-                 * between tries, which seems less desirable.
-                 */
-                Sleep(10);
-            }
-        } else {
-            rcstat = -1;
+            /*
+             * Wait 0.01 seconds before trying again.  _locking()
+             * with _LK_LOCK would work similarly but waits 1 second
+             * between tries, which seems less desirable.
+             */
+            Sleep(10);
         }
 #else
         struct flock lock;
