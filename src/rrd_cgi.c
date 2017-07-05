@@ -5,9 +5,8 @@
  *****************************************************************************/
 
 #include "rrd_tool.h"
-#ifdef HAVE_STDLIB_H
 #include <stdlib.h>
-#endif
+#include <stdio.h>
 
 #define MEMBLK 1024
 /*#define DEBUG_PARSER
@@ -560,13 +559,13 @@ static char *rrdsetenv(
     const char **args)
 {
     if (argc >= 2) {
-        const size_t len = strlen(args[0]) + strlen(args[1]) + 2;
-        char *xyz = (char *) malloc(len);
+        char *xyz = NULL;
 
+        asprintf(&xyz, "%s=%s", args[0], args[1]);
         if (xyz == NULL) {
             return stralloc("[ERROR: allocating setenv buffer]");
-        };
-        snprintf(xyz, len, "%s=%s", args[0], args[1]);
+        }
+
         if (putenv(xyz) == -1) {
             free(xyz);
             return stralloc("[ERROR: failed to do putenv]");
@@ -754,10 +753,9 @@ static char *includefile(
 
         readfile(filename, &buffer, 0);
         if (rrd_test_error()) {
-            const size_t len = strlen(rrd_get_error()) + DS_NAM_SIZE;
-            char *err = (char *) malloc(len);
+            char *err = NULL;
 
-            snprintf(err, len, "[ERROR: %s]", rrd_get_error());
+            asprintf(&err, "[ERROR %s]", rrd_get_error());
             rrd_clear_error();
             free(buffer);
             return err;
@@ -922,9 +920,8 @@ static char *drawgraph(
         return stralloc(calcpr[0]);
     } else {
         if (rrd_test_error()) {
-            const size_t len = strlen(rrd_get_error()) + DS_NAM_SIZE;
-            char *err = (char *) malloc(len);
-            snprintf(err, len, "[ERROR: %s]", rrd_get_error());
+            char *err = NULL;
+            asprintf(&err, "[ERROR: %s]", rrd_get_error());
             rrd_clear_error();
             return err;
         }
@@ -965,9 +962,8 @@ static char *printtimelast(
 
         last = rrd_last(argc, (char **) args - 1);
         if (rrd_test_error()) {
-            const size_t len = strlen(rrd_get_error()) + DS_NAM_SIZE;
-            char *err = (char *) malloc(len);
-            snprintf(err, len, "[ERROR: %s]", rrd_get_error());
+            char *err = NULL;
+            asprintf(&err, "[ERROR: %s]", rrd_get_error());
             rrd_clear_error();
             free(buf);
             return err;
@@ -1517,13 +1513,11 @@ static s_var **rrdcgiReadVariables(
                 i++;
             } else {    /* There is already such a name, suppose a multiple field */
                 cp = ++esp;
-                len = strlen(result[k]->value) + (ip - esp) + 2;
-                if ((sptr = (char *) calloc(len, sizeof(char))) == NULL) {
+                if (asprintf(&sptr, "%s\n%s", result[k]->value, cp) < 0) {
                     free_result(result, i);
                     free(line);
                     return NULL;
                 }
-                snprintf(sptr, len, "%s\n%s", result[k]->value, cp);
                 free(result[k]->value);
                 result[k]->value = rrdcgiDecodeString(sptr);
             }
