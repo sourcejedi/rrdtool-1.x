@@ -130,6 +130,7 @@
 #endif
 
 static int rrd_rwlock(rrd_file_t *rrd_file, int writelock);
+static int close_and_unlock(int fd);
 
 /* Open a database file, return its header and an open filehandle,
  * positioned to the first cdp in the first rra.
@@ -518,10 +519,9 @@ read_check:
       }
     }
 
-    
-    
   out_done:
     return (rrd_file);
+
   out_close:
 #ifdef HAVE_MMAP
     if (data != MAP_FAILED)
@@ -531,8 +531,18 @@ read_check:
     if (rrd_file->rados)
       rrd_rados_close(rrd_file->rados);
 #endif
-    if (rrd_simple_file->fd >= 0)
-      close(rrd_simple_file->fd);
+    if (rrd_simple_file->fd >= 0) {
+      /* keep the original error */
+      char *e = strdup(rrd_get_error());
+
+      close_and_unlock(rrd_simple_file->fd);
+
+      if (e) {
+        rrd_set_error(e);
+        free(e);
+      } else
+        rrd_set_error("error message was lost (out of memory)");
+    }
   out_free:
     free(rrd_file->pvt);
     free(rrd_file);
@@ -599,7 +609,72 @@ int rrd_lock(
     return rrd_rwlock(rrd_file, 1);
 }
 
-static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
+#if defined(_WIN32) && !defined(__CYGWIN__) && !defined(__CYGWIN32__)
+#define USE_WINDOWS_LOCK 1
+#endif
+
+#ifdef USE_WINDOWS_LOCK
+static
+int rrd_windows_lock(
+    int fd)
+{
+    int ret;
+
+    while (1) {
+        ret = _locking(fd, _LK_NBLCK, LONG_MAX);
+        if (ret == 0)
+            break; /* success */
+        if (errno != EACCES)
+            break; /* failure */
+        /* EACCES: someone else has the lock. */
+
+        /*
+         * Wait 0.01 seconds before trying again.  _locking()
+         * with _LK_LOCK would work similarly but waits 1 second
+         * between tries, which seems less desirable.
+         */
+        Sleep(10);
+    }
+
+    return ret;
+}
+#endif
+
+static
+int close_and_unlock(
+    int fd)
+{
+    int ret;
+
+#ifdef USE_WINDOWS_LOCK
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        rrd_set_error("lseek: %s", rrd_strerror(errno));
+        ret = -1;
+        goto out_close;
+    }
+
+    ret = _locking(fd, LK_UNLCK, LONG_MAX);
+    if (ret != 0 && errno == EACCES)
+        /* fd was not locked - this is entirely possible, ignore the error */
+        ret = 0;
+
+    if (ret != 0)
+        rrd_set_error("unlock file: %s", rrd_strerror(errno));
+out_close:
+#endif
+
+    if (close(fd) != 0) {
+        ret = -1;
+        rrd_set_error("closing file: %s", rrd_strerror(errno));
+    }
+
+    return ret;
+}
+
+static
+int rrd_rwlock(
+    rrd_file_t *rrd_file,
+    int writelock)
 {
 #ifdef DISABLE_FLOCK
     (void)rrd_file;
@@ -624,24 +699,10 @@ static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
     int       rcstat;
     rrd_simple_file_t *rrd_simple_file;
     rrd_simple_file = (rrd_simple_file_t *)rrd_file->pvt;
-    {
-#if defined(_WIN32) && !defined(__CYGWIN__) && !defined(__CYGWIN32__)
-        while (1) {
-            rcstat = _locking(rrd_simple_file->fd, _LK_NBLCK, LONG_MAX);
-            if (rcstat == 0)
-                break; /* success */
-            if (errno != EACCES)
-                break; /* failure */
-            /* EACCES: someone else has the lock. */
-
-            /*
-             * Wait 0.01 seconds before trying again.  _locking()
-             * with _LK_LOCK would work similarly but waits 1 second
-             * between tries, which seems less desirable.
-             */
-            Sleep(10);
-        }
+#ifdef USE_WINDOWS_LOCK
+    rcstat = rrd_windows_lock(rrd_simple_file->fd);
 #else
+    {
         struct flock lock;
 
         lock.l_type = writelock ?
@@ -652,8 +713,8 @@ static int rrd_rwlock(rrd_file_t *rrd_file, int writelock)
         lock.l_whence = SEEK_SET;   /* end of file */
 
         rcstat = fcntl(rrd_simple_file->fd, F_SETLK, &lock);
-#endif
     }
+#endif
 
     return (rcstat);
 #endif
@@ -749,6 +810,12 @@ int rrd_close(
     rrd_simple_file = (rrd_simple_file_t *)rrd_file->pvt;
     int       ret = 0;
 
+#ifdef HAVE_LIBRADOS
+    if (rrd_file->rados) {
+        if (rrd_rados_close(rrd_file->rados) != 0)
+            ret = -1;
+    }
+#endif
 #ifdef HAVE_MMAP
     if (rrd_simple_file->file_start != NULL) {
         if (munmap(rrd_simple_file->file_start, rrd_file->file_len) != 0) {
@@ -757,17 +824,9 @@ int rrd_close(
         }
     }
 #endif
-#ifdef HAVE_LIBRADOS
-    if (rrd_file->rados) {
-        if (rrd_rados_close(rrd_file->rados) != 0)
-            ret = -1;
-    }
-#endif
     if (rrd_simple_file->fd >= 0) {
-        if (close(rrd_simple_file->fd) != 0) {
+        if (close_and_unlock(rrd_simple_file->fd) != 0)
             ret = -1;
-            rrd_set_error("closing file: %s", rrd_strerror(errno));
-        }
     }
     free(rrd_file->pvt);
     free(rrd_file);
