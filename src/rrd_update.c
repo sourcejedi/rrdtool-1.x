@@ -902,7 +902,8 @@ static int _rrd_updatex(
                 if ((save_error = strdup(rrd_get_error())) != NULL) {
                     rrd_set_error("%s: %s", filename, save_error);
                     free(save_error);
-                }
+                } else
+                    rrd_set_error("error message was lost (out of memory)");
             }
             free(arg_copy);
             break;
