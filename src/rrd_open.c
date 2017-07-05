@@ -12,17 +12,17 @@
 #include <synchapi.h>
 #include <limits.h>
 #endif
+#endif
 
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
-#endif
-
 #include "rrd_tool.h"
 #include "unused.h"
 
 #ifdef HAVE_BROKEN_MS_ASYNC
-#include <sys/types.h>
 #include <utime.h>
 #endif
 
