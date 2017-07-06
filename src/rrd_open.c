@@ -644,7 +644,7 @@ static
 int close_and_unlock(
     int fd)
 {
-    int ret;
+    int ret = 0;
 
 #ifdef USE_WINDOWS_LOCK
     if (lseek(fd, 0, SEEK_SET) < 0) {
