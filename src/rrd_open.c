@@ -619,6 +619,24 @@ int rrd_windows_lock(
     int fd)
 {
     int ret;
+    long pos;
+
+    /*
+     * _locking() is relative to fd position.
+     * We need to consistently lock bytes starting from 0,
+     * so we can successfully unlock on close.
+     *
+     * Note rrd_lock() API doesn't set a specific error message.
+     * Knowing that rrd_lock() (or even rrd_open()) failed should
+     * be specific enough, if someone manages to invoke rrdtool
+     * on something silly like a named pipe or COM1.
+     */
+    pos = tell(fd);
+    if (pos < 0)
+        return -1;
+
+    if (lseek(fd, 0, SEEK_SET) < 0)
+        return -1;
 
     while (1) {
         ret = _locking(fd, _LK_NBLCK, LONG_MAX);
@@ -636,6 +654,10 @@ int rrd_windows_lock(
         Sleep(10);
     }
 
+    /* restore saved fd position */
+    if (lseek(fd, pos, SEEK_SET) < 0)
+        return -1;
+
     return ret;
 }
 #endif
@@ -647,6 +669,14 @@ int close_and_unlock(
     int ret = 0;
 
 #ifdef USE_WINDOWS_LOCK
+    /*
+     * "If a process closes a file that has outstanding locks, the locks are
+     *  unlocked by the operating system. However, the time it takes for the
+     *  operating system to unlock these locks depends upon available system
+     *  resources. Therefore, it is recommended that your process explicitly
+     *  unlock all files it has locked when it terminates."  (?!)
+     */
+
     if (lseek(fd, 0, SEEK_SET) < 0) {
         rrd_set_error("lseek: %s", rrd_strerror(errno));
         ret = -1;
